@@ -194,6 +194,12 @@ namespace UnityEngine.UI
         protected TouchScreenKeyboard m_Keyboard;
         static private readonly char[] kSeparators = { ' ', '.', ',', '\t', '\r', '\n' };
 
+    #if UNITY_ANDROID
+        static private bool s_IsQuestDeviceEvaluated = false;
+    #endif // if UNITY_ANDROID
+
+        static private bool s_IsQuestDevice = false;
+
         /// <summary>
         /// Text Text used to display the input's value.
         /// </summary>
@@ -321,6 +327,7 @@ namespace UnityEngine.UI
 
         // Doesn't include dot and @ on purpose! See usage for details.
         const string kEmailSpecialCharacters = "!#$%&'*+-/=?^_`{|}~";
+        const string kOculusQuestDeviceModel = "Oculus Quest";
 
         protected InputField()
         {
@@ -1036,6 +1043,21 @@ namespace UnityEngine.UI
 
     #endif // if UNITY_EDITOR
 
+    #if UNITY_ANDROID
+        protected override void Awake()
+        {
+            base.Awake();
+
+            if (s_IsQuestDeviceEvaluated)
+                return;
+
+            // Used for Oculus Quest 1 and 2 software keyboard regression.
+            // TouchScreenKeyboard.isInPlaceEditingAllowed is always returning true in these devices and would prevent the software keyboard from showing up if that value was used.
+            s_IsQuestDevice = SystemInfo.deviceModel == kOculusQuestDeviceModel;
+            s_IsQuestDeviceEvaluated = true;
+        }
+    #endif // if UNITY_ANDROID
+
         protected override void OnEnable()
         {
             base.OnEnable();
@@ -1254,6 +1276,9 @@ namespace UnityEngine.UI
             switch (platform)
             {
                 case RuntimePlatform.Android:
+                    if (s_IsQuestDevice)
+                        return TouchScreenKeyboard.isSupported;
+
                     return !TouchScreenKeyboard.isInPlaceEditingAllowed;
                 default:
                     return TouchScreenKeyboard.isSupported;
@@ -1269,7 +1294,7 @@ namespace UnityEngine.UI
         // This currently only happens on Chrome OS devices (that support laptop and tablet mode).
         private bool InPlaceEditingChanged()
         {
-            return m_TouchKeyboardAllowsInPlaceEditing != TouchScreenKeyboard.isInPlaceEditingAllowed;
+            return !s_IsQuestDevice && m_TouchKeyboardAllowsInPlaceEditing != TouchScreenKeyboard.isInPlaceEditingAllowed;
         }
 
         void UpdateCaretFromKeyboard()
@@ -1681,6 +1706,7 @@ namespace UnityEngine.UI
             bool shift = (currentEventModifiers & EventModifiers.Shift) != 0;
             bool alt = (currentEventModifiers & EventModifiers.Alt) != 0;
             bool ctrlOnly = ctrl && !alt && !shift;
+            bool shiftOnly = shift && !ctrl && !alt;
 
             switch (evt.keyCode)
             {
@@ -1758,6 +1784,26 @@ namespace UnityEngine.UI
                         Delete();
                         UpdateTouchKeyboardFromEditChanges();
                         SendOnValueChangedAndUpdateLabel();
+                        return EditState.Continue;
+                    }
+                    break;
+                }
+                case KeyCode.Insert:
+                {
+                    // Copy via Insert key
+                    if (ctrlOnly)
+                    {
+                        if (inputType != InputType.Password)
+                            clipboard = GetSelectedString();
+                        else
+                            clipboard = "";
+                        return EditState.Continue;
+                    }
+                    // Paste via insert key.
+                    else if (shiftOnly)
+                    {
+                        Append(clipboard);
+                        UpdateLabel();
                         return EditState.Continue;
                     }
                     break;
@@ -2264,10 +2310,25 @@ namespace UnityEngine.UI
 
             // If we have an input validator, validate the input first
             int insertionPoint = Math.Min(selectionFocusPosition, selectionAnchorPosition);
+
+            //Get the text based on selection for validation instead of whole text(case 1253193).
+            var validateText = text;
+            if (selectionFocusPosition != selectionAnchorPosition)
+            {
+                if (caretPositionInternal < caretSelectPositionInternal)
+                {
+                    validateText = text.Substring(0, caretPositionInternal) + text.Substring(caretSelectPositionInternal, text.Length - caretSelectPositionInternal);
+                }
+                else
+                {
+                    validateText = text.Substring(0, caretSelectPositionInternal) + text.Substring(caretPositionInternal, text.Length - caretPositionInternal);
+                }
+            }
+
             if (onValidateInput != null)
-                input = onValidateInput(text, insertionPoint, input);
+                input = onValidateInput(validateText, insertionPoint, input);
             else if (characterValidation != CharacterValidation.None)
-                input = Validate(text, insertionPoint, input);
+                input = Validate(validateText, insertionPoint, input);
 
             // If the input is invalid, skip it
             if (input == 0)
@@ -2936,7 +2997,7 @@ namespace UnityEngine.UI
             // Cache the value of isInPlaceEditingAllowed, because on UWP this involves calling into native code
             // Usually, the value only needs to be updated once when the TouchKeyboard is opened; however, on Chrome OS,
             // we check repeatedly to see if the in-place editing state has changed, so we can take action.
-            m_TouchKeyboardAllowsInPlaceEditing = TouchScreenKeyboard.isInPlaceEditingAllowed;
+            m_TouchKeyboardAllowsInPlaceEditing = !s_IsQuestDevice && TouchScreenKeyboard.isInPlaceEditingAllowed;
 
             if (TouchScreenKeyboardShouldBeUsed())
             {

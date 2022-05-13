@@ -26,6 +26,7 @@ public class HealthBar : MonoBehaviour
         {
             PlayerHealth.Currenthealth = 0; // player health will be 0
         }
+       
         SetSize(PlayerHealth.Currenthealth); // will pass player health to the set size methof 
     }
 
